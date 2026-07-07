@@ -452,6 +452,7 @@ def main():
     
     create_sql = f"""
         CREATE TABLE {output_table} (
+            id INT IDENTITY(1,1) PRIMARY KEY,
             id_table INT,
             alamat_etl NVARCHAR(MAX),
             kelurahan_desa_id INT,
