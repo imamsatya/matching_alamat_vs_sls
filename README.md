@@ -30,6 +30,12 @@ Script mengenali berbagai format penulisan RT/RW:
 | `RT 02 /07` | 2 | 7 |
 | `RT 04/15` | 4 | 15 |
 | `Rt 005 Rw 002` | 5 | 2 |
+- `RT 01/RW 04` → `RT=1, RW=4`
+- `Rt 005 Rw 002` → `RT=5, RW=2`
+- `RT II RW IV` → `RT=2, RW=4` (Angka Romawi didukung hingga XX)
+
+### Area/Dusun Fallback
+Script dirancang untuk menangani variasi alamat **tanpa nomor RT/RW**. Jika regex gagal menemukan indikator RT/RW di input (atau jika Master SLS di kelurahan tersebut tidak mencantumkan nomor RT sama sekali), proses akan melakukan **Fuzzy Matching terhadap nama Dusun** melawan seluruh entri SLS di kelurahan terkait.
 
 **Aturan penting:**
 - **RT selalu angka pertama**, RW selalu angka kedua
@@ -96,7 +102,22 @@ DB_PASSWORD=xxxxx
 
 ### Jalankan
 ```bash
-python3 match_alamat_sls.py
+Script `match_alamat_sls.py` menjalankan alur berikut:
+
+1. **Memuat Data Input (BPOM)**
+   - Script akan memuat seluruh alamat dari tabel ETL BPOM yang tidak ditandai sebagai duplikat (`is_duplicate = 0`).
+2. **Memuat Data Master (SLS)**
+   - Mengambil data SLS untuk kelurahan yang ada pada data input.
+3. **Ekstraksi RT/RW**
+   - Mendeteksi format angka biasa maupun **angka romawi** (misal: RT II = RT 2).
+   - Ekstraksi juga dilakukan pada nama SLS di tabel master (`nmsls_25_2`).
+4. **Matching & Blocking**
+   - **Blocking** dilakukan pada level kelurahan (hanya membandingkan alamat dengan SLS pada kelurahan yang sama).
+   - **Filter 1 (Exact RT+RW Match):** Memilih kandidat SLS dengan nomor RT (dan RW jika ada) yang sama persis.
+   - **Filter 2 (Dusun Fallback):** Jika alamat tidak memiliki nomor RT atau RT tidak ditemukan di Master SLS, script akan mem-bypass filter RT dan membandingkan nama Dusun secara fuzzy dengan seluruh kandidat SLS di kelurahan tersebut.
+   - **Filter 3 (Fuzzy Match Name):** Jika terdapat banyak kandidat dengan RT yang sama (atau saat fallback), dilakukan perbandingan teks berbasis fuzzy (`token_set_ratio`) pada nama dusun/lingkungan (threshold 55).
+5. **Output**
+   - Hasil akan disimpan langsung ke tabel baru di database dengan nama tabel sama seperti tabel input ditambah akhiran `_hasil_match_sls`.
 ```
 
 ## Output
