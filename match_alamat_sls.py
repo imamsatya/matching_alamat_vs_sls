@@ -226,9 +226,7 @@ def match_single_row(row, sls_by_kel, config):
     result['rt_extracted'] = rt
     result['rw_extracted'] = rw
     
-    if rt is None:
-        result['match_status'] = 'unmatch_no_rt'
-        return result
+
     
     if kel_id is None:
         result['match_status'] = 'unmatch_no_kelurahan'
