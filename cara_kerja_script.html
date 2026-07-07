@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cara Kerja Script: Matching Alamat BPOM vs Master SLS</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 40px auto; padding: 20px; color: #333; }
+        h1 { border-bottom: 2px solid #eaecef; padding-bottom: 10px; color: #24292e; text-align: center; }
+        h2 { color: #0366d6; margin-top: 35px; border-bottom: 1px solid #eaecef; padding-bottom: 5px; }
+        h3 { color: #24292e; margin-top: 25px; }
+        p { margin-bottom: 16px; }
+        ul, ol { margin-bottom: 20px; }
+        li { margin-bottom: 10px; }
+        code { background-color: #f6f8fa; padding: 2px 4px; border-radius: 3px; font-family: monospace; font-size: 90%; color: #d73a49; }
+        .box { background-color: #f8f9fa; padding: 15px; border: 1px solid #e1e4e8; border-radius: 6px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+    <h1>Cara Kerja Script: Matching Alamat BPOM vs Master SLS</h1>
+    
+    <div class="box">
+        <p>Script <code>match_alamat_sls.py</code> adalah sebuah program berbasis Python yang dirancang untuk mencocokkan data alamat dari database BPOM dengan database referensi Satuan Lingkungan Setempat (SLS) dari BPS, guna menemukan identifier SLS (<code>idsubsls_25_2</code>).</p>
+    </div>
+
+    <p>Berikut adalah urutan logika dan cara kerja dari script ini secara langkah demi langkah:</p>
+
+    <h2>1. Koneksi &amp; Pengambilan Data (Load Data)</h2>
+    <p>Proses dimulai dengan membuka koneksi ke database SQL Server (menggunakan kredensial dari file <code>.env</code>).</p>
+    <ul>
+        <li><strong>Data Input:</strong> Memuat seluruh alamat dari tabel BPOM di mana field <code>is_duplicate = 0</code>.</li>
+        <li><strong>Data Master:</strong> Mengambil daftar unik <code>kelurahan_desa_id</code> dari data input, lalu menarik semua data Master SLS dari tabel referensi <strong>hanya untuk kelurahan-kelurahan tersebut</strong> (demi efisiensi memori).</li>
+    </ul>
+
+    <h2>2. Pembuatan Lookup Master (Preprocessing SLS)</h2>
+    <p>Seluruh data Master SLS yang ditarik akan diproses terlebih dahulu sebelum pencocokan dimulai:</p>
+    <ul>
+        <li>Mengekstrak <strong>Nomor RT</strong> dan <strong>Nomor RW</strong> dari nama SLS (misal: "RT 1 RW 2 DUSUN ASRI"). Script mendukung pengenalan angka arab maupun angka romawi.</li>
+        <li>Nama Dusun/Lingkungan dipisahkan dari angka RT/RW untuk keperluan <em>fuzzy matching</em>.</li>
+        <li>Data-data ini disimpan ke dalam sebuah <em>Dictionary/Lookup Table</em> yang dikelompokkan (di-blocking) berdasarkan ID Kelurahan. Ini memastikan alamat di suatu kelurahan tidak akan dibandingkan dengan SLS di kelurahan lain.</li>
+    </ul>
+
+    <h2>3. Ekstraksi Data Alamat Input</h2>
+    <p>Untuk setiap baris alamat BPOM, script akan memproses teks alamatnya:</p>
+    <ul>
+        <li><strong>Ekstraksi RT &amp; RW:</strong> Menggunakan <em>Regular Expression</em> (Regex) untuk mencari pola RT dan RW. Terdapat aturan mutlak bahwa angka pertama yang ditemukan selalu berasosiasi dengan RT, dan angka kedua adalah RW. Angka Romawi juga dikonversi secara otomatis.</li>
+        <li><strong>Ekstraksi Area/Dusun:</strong> Script akan mencari kata kunci penanda area seperti <code>DUSUN</code>, <code>KAMPUNG</code>, <code>LINGKUNGAN</code>, <code>PERUM</code>, dll, lalu mengambil kata-kata di sebelahnya untuk dijadikan kunci <em>fuzzy matching</em> jika diperlukan.</li>
+    </ul>
+
+    <h2>4. Inti Proses Matching (Kandidasi &amp; Seleksi)</h2>
+    <p>Setiap alamat BPOM dicocokkan dengan kandidat SLS di kelurahan yang sama. Alur seleksinya adalah:</p>
+    <ol>
+        <li><strong>Exact RT Match (Filter Utama):</strong><br>
+            Script mencari SLS yang memiliki angka RT yang persis sama dengan RT di alamat input.
+        </li>
+        <li><strong>Dusun Fallback (Jika RT tidak ada/tidak cocok):</strong><br>
+            Jika alamat BPOM tidak memiliki angka RT, <strong>ATAU</strong> jika kandidat SLS yang memiliki RT tersebut kosong (kemungkinan Master SLS kelurahan tersebut tidak pakai RT), maka script akan <strong>mengabaikan filter RT</strong>. Seluruh SLS di kelurahan itu dijadikan kandidat.
+        </li>
+        <li><strong>Exact RW Match (Penyempitan):</strong><br>
+            Jika RT cocok (dan tidak fallback), script mengecek apakah ada RW. Jika SLS memiliki nomor RW, maka sistem menyeleksi kandidat dengan RT dan RW yang sama.
+        </li>
+        <li><strong>Auto-Match (Kandidat Tunggal):</strong><br>
+            Setelah filter di atas, jika hanya tersisa <strong>1 (satu) kandidat tunggal</strong>, maka script langsung mendeklarasikannya sebagai <strong>MATCH (Skor 100)</strong> tanpa perlu <em>fuzzy matching</em>.<br>
+            Jika ada beberapa kandidat, tetapi nama utuhnya identik/duplikat di dalam database master, script juga akan menganggapnya sebagai <em>MATCH</em>.
+        </li>
+        <li><strong>Fuzzy Matching Area (Jika Kandidat Ganda / Fallback):</strong><br>
+            Jika masih terdapat lebih dari satu kandidat (atau jika sistem berjalan di mode <em>Fallback</em> ke Dusun), script akan mengevaluasi kemiripan teks menggunakan algoritma <code>token_set_ratio</code>.<br>
+            Area yang diekstrak dari alamat BPOM dibandingkan dengan area dari seluruh kandidat SLS.<br>
+            <strong>Syarat Menang:</strong> Kandidat dengan skor tertinggi akan memenangkan <em>match</em> <strong>HANYA JIKA</strong> skornya lebih besar dari <code>55</code> (Threshold) <strong>DAN</strong> selisih skornya (gap) dengan juara kedua adalah minimal <code>10</code> poin.<br>
+            Jika gap &lt; 10 atau skor tertingginya &lt; 55, script mengklasifikasikannya sebagai <code>possible_low_score</code> atau <code>possible_multiple_no_area</code> untuk di-review secara manual.
+        </li>
+    </ol>
+
+    <h2>5. Output Data</h2>
+    <p>Setelah seluruh alamat BPOM selesai dihitung, script akan:</p>
+    <ul>
+        <li>Menghapus tabel hasil (jika sudah ada sebelumnya).</li>
+        <li>Membuat tabel baru bernama <code>[NAMA_TABEL_INPUT]_hasil_match_sls</code>.</li>
+        <li>Menyisipkan seluruh data (<em>batch insert</em>) ke dalam tabel baru tersebut, lengkap dengan kolom <strong>Primary Key (id)</strong> (Auto-Increment), hasil ekstraksi RT/RW, dan identitas SLS yang di-match (termasuk <code>idsubsls_25_2</code>).</li>
+    </ul>
+
+    <div class="box" style="background-color: #e6f3ff; border-color: #b3d9ff;">
+        <strong>Kesimpulan:</strong> Dengan pendekatan ini, script bisa memetakan alamat skala besar dengan akurasi tinggi sambil menghindari <em>false positive</em> (salah mencocokkan) saat menghadapi data ambigu berkat adanya selisih minimal 10 poin.
+    </div>
+
+</body>
+</html>

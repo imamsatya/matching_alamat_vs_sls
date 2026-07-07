@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q&A Evaluasi Script Matching SLS</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 40px auto; padding: 20px; color: #333; }
+        h1 { border-bottom: 2px solid #eaecef; padding-bottom: 10px; color: #24292e; }
+        h3 { color: #005cc5; margin-top: 30px; }
+        p { margin-bottom: 16px; }
+        li { margin-bottom: 10px; }
+        code { background-color: #f6f8fa; padding: 2px 4px; border-radius: 3px; font-family: monospace; font-size: 90%; }
+        .answer { background-color: #f1f8ff; padding: 15px; border-left: 4px solid #0366d6; border-radius: 0 4px 4px 0; margin-bottom: 30px; }
+    </style>
+</head>
+<body>
+    <h1>Tanya Jawab (Q&A) Evaluasi Script Matching SLS</h1>
+    <p>Dokumen ini merangkum pertanyaan-pertanyaan yang diajukan selama proses pengembangan script <code>match_alamat_sls.py</code> beserta jawaban dan analisisnya.</p>
+    
+    <hr>
+    
+    <h3>Q1: Apakah query inputnya harus menggunakan filter <code>WHERE alamat_etl LIKE '%% RT %%'</code>? Bagaimana kalau Master SLS-nya tidak mengandung RT/RW, tetapi hanya ada nama Dusun saja?</h3>
+    
+    <div class="answer">
+        <p><strong>Jawaban:</strong></p>
+        <p>Awalnya script dibuat dengan filter tersebut karena asumsinya kita hanya fokus pada alamat yang eksplisit menyebutkan RT. Namun, setelah dievaluasi, ternyata <strong>terdapat ratusan ribu Master SLS (sekitar 268.000 entri) yang namanya hanya mencantumkan Dusun/Lingkungan tanpa nomor RT</strong>.</p>
+        <p>Oleh karena itu, filter <code>LIKE '%% RT %%'</code> <strong>sudah dihapus</strong> sehingga seluruh data non-duplikat akan diproses.</p>
+        <p>Sebagai solusinya, kita menambahkan algoritma <strong>Dusun Fallback</strong>:</p>
+        <ul>
+            <li>Jika alamat input tidak memiliki tulisan "RT", ATAU</li>
+            <li>Jika Master SLS di kelurahan tersebut sama sekali tidak menggunakan sistem RT (hanya berupa daftar Dusun),</li>
+        </ul>
+        <p>Maka script akan mem-<em>bypass</em> proses penyaringan nomor RT, dan langsung melakukan perbandingan kemiripan teks (<em>Fuzzy Matching</em>) antara area/dusun dari input alamat melawan seluruh kandidat SLS di kelurahan tersebut.</p>
+    </div>
+
+    <hr>
+
+    <h3>Q2: Menurut kamu apa kekurangan script ini? Pada kasus apa dia akan menghasilkan salah tebak (<em>false match</em>)?</h3>
+    
+    <div class="answer">
+        <p><strong>Jawaban:</strong></p>
+        <p>Walaupun script sudah dibekali sistem pertahanan (seperti <em>exact match</em> untuk angka RT dan batasan selisih poin untuk <em>fuzzy</em>), tidak ada sistem <em>matching</em> teks yang 100% sempurna. Berikut adalah beberapa skenario kelemahan di mana script berpotensi menghasilkan <strong>False Match</strong>:</p>
+        
+        <ol>
+            <li><strong>Kasus Salah Ketik RT (Fallback Terlalu Jauh)</strong><br>
+                <em>Skenario:</em> Input = <code>"RT 3 Dusun Mawar"</code>. Di database master kelurahan tersebut hanya ada <code>"RT 2 Dusun Mawar"</code>.<br>
+                <em>Error:</em> Script tidak menemukan RT 3, lalu masuk ke mode <em>fallback</em> (hanya membandingkan nama "Mawar"). Karena namanya identik skor 100, script akan menjodohkannya ke "RT 2". Padahal aslinya itu adalah tempat yang berbeda (RT 3 vs RT 2).
+            </li>
+            <li><strong>Kelemahan Metode <code>token_set_ratio</code> Terlalu Toleran</strong><br>
+                <em>Skenario:</em> Input = <code>"DUSUN JAYA"</code>. Di database master ada <code>"RT 1 DUSUN MEKAR JAYA"</code>.<br>
+                <em>Error:</em> Karena metode <code>token_set_ratio</code> mengabaikan kata tambahan, skor akan tetap 100 meskipun kata "Mekar" hilang di input. Jika kebetulan tidak ada kandidat lain di kelurahan itu, script akan menganggapnya <em>Match</em>.
+            </li>
+            <li><strong>RW Diabaikan saat Mode Fallback</strong><br>
+                <em>Skenario:</em> Input = <code>"KAMPUNG MELAYU RW 5"</code> (tidak ada tulisan RT-nya).<br>
+                <em>Error:</em> Script gagal menemukan RT, langsung masuk <em>fallback</em> nama Dusun, membandingkan kata "Melayu". Script sama sekali tidak mengecek nilai RW-nya. Jika yang menang ternyata memiliki RW 2, script akan men-statuskannya sebagai <em>Match</em>.
+            </li>
+            <li><strong>Over-Extraction Area di Kota Besar</strong><br>
+                <em>Skenario:</em> Input = <code>"Jalan Komplek Perumahan Indah RT 1"</code>.<br>
+                <em>Error:</em> Script membuang awalan "PERUM" dan menyisakan kata <code>"INDAH"</code> sebagai target pencarian Dusun. Jika di kelurahan yang sama ternyata kebetulan ada Master bernama <code>"DUSUN INDAH"</code>, keduanya akan dijodohkan, padahal konteks Perumahan dan Dusun biasanya menunjuk ke lokasi yang berbeda.
+            </li>
+            <li><strong>Format RT/RW Terbalik (<em>False Negative</em>)</strong><br>
+                <em>Skenario:</em> Pengguna BPOM menginput alamat <code>"RW 01 / RT 03"</code>.<br>
+                <em>Error:</em> Script kita secara kaku mengasumsikan angka sebelum garis miring pasti adalah RT, dan setelahnya pasti RW. Script akan menganggapnya sebagai RT 1, yang akan berujung pada gagal <em>match</em> (Unmatch).
+            </li>
+        </ol>
+
+        <p><strong>Rekomendasi Perbaikan Tambahan (Jika Diperlukan):</strong><br>
+        - Fallback ke Dusun <em>hanya</em> diizinkan jika input alamat benar-benar tidak menyebutkan "RT". Jika input menyebutkan RT namun beda dengan Master, langsung saja gagalkan (<em>Unmatch</em>) untuk menghindari salah sambung ke tetangganya.<br>
+        - Validasi RW juga wajib dilakukan di dalam mode <em>Fallback</em> jika input menyebutkan RW.</p>
+    </div>
+</body>
+</html>
